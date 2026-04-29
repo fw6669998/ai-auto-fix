@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+
+{% block title %}Commit #{{ commit.id }} - AI 代码质量管理{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="/admin/commits" class="btn btn-outline-secondary mb-3">← 返回列表</a>
+
+    {% if commit %}
+    <div class="card mb-4">
+        <div class="card-header">
+            <h6 class="mb-0">修改状态和上下文</h6>
+        </div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">审查结果</label>
+                    <select class="form-select" id="checkResult">
+                        <option value="">待检查</option>
+                        <option value="no_issue">通过</option>
+                        <option value="has_issue">有问题</option>
+                        <option value="skipped">跳过</option>
+                    </select>
+                </div>
+                <div class="col-md-8">
+                    <label class="form-label">AI上下文（供AI处理时参考）</label>
+                    <textarea class="form-control" id="context" rows="3" placeholder="如：这是支付模块的代码，请注意...">{{ commit.context or '' }}</textarea>
+                </div>
+            </div>
+            <div class="mt-3">
+                <button type="button" class="btn btn-primary" id="saveBtn">保存</button>
+            </div>
+            <script>
+            document.getElementById('saveBtn').addEventListener('click', function() {
+                const checkResult = document.getElementById('checkResult').value;
+                const context = document.getElementById('context').value;
+                fetch('/api/admin/commits/{{ commit.id }}/status', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({check_result: checkResult, context: context})
+                }).then(r => r.json()).then(r => {
+                    if (r.success) location.reload();
+                    else alert(r.msg || '保存失败');
+                });
+            });
+            {% if commit.check_result %}
+            document.getElementById('checkResult').value = '{{ commit.check_result }}';
+            {% endif %}
+            </script>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">Commit 审查详情 #{{ commit.id }}</h5>
+            {% if commit.check_result == 'no_issue' %}
+            <span class="badge bg-success">通过</span>
+            {% elif commit.check_result == 'has_issue' %}
+            <span class="badge bg-danger">有问题</span>
+            {% elif commit.check_result == 'skipped' %}
+            <span class="badge bg-info">跳过</span>
+            {% else %}
+            <span class="badge bg-warning text-dark">待检查</span>
+            {% endif %}
+        </div>
+        <div class="card-body">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <strong>项目：</strong> {{ commit.project_name or '-' }}<br>
+                    <strong>Commit ID：</strong> <code>{{ commit.commit_id }}</code><br>
+                    <strong>分支：</strong> {{ commit.branch or '-' }}
+                </div>
+                <div class="col-md-6">
+                    <strong>检查状态：</strong> {{ commit.check_status }}<br>
+                    <strong>创建时间：</strong> {{ commit.created_at.strftime('%Y-%m-%d %H:%M:%S') }}<br>
+                    <strong>更新时间：</strong> {{ commit.updated_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if commit.check_details %}
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 class="mb-0">审查详情</h6>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="rawToggle">
+                <label class="form-check-label" for="rawToggle">显示原始</label>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div id="checkDetailsParsed" class="p-3 bg-code border-0 rounded-0" style="max-height: 800px; overflow-y: auto;"></div>
+            <pre id="checkDetailsRaw" class="mb-0 bg-code p-3 border-0 rounded-0 d-none" style="max-height: 800px; overflow-y: auto;"><code>{{ commit.check_details }}</code></pre>
+        </div>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="alert alert-warning">记录不存在</div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if commit.check_details %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const content = {{ commit.check_details|tojson }};
+    const parsedContainer = document.getElementById('checkDetailsParsed');
+    const rawContainer = document.getElementById('checkDetailsRaw');
+    const toggle = document.getElementById('rawToggle');
+
+    // 尝试解析JSON
+    let data;
+    try {
+        data = JSON.parse(content);
+        parsedContainer.innerHTML = renderJson(data, '');
+    } catch (e) {
+        // 如果不是JSON，直接显示文本
+        parsedContainer.innerHTML = `<pre class="mb-0"><code>${escapeHtml(content)}</code></pre>`;
+        toggle.disabled = true;
+    }
+
+    // 切换显示
+    toggle.addEventListener('change', function() {
+        if (this.checked) {
+            parsedContainer.classList.add('d-none');
+            rawContainer.classList.remove('d-none');
+        } else {
+            parsedContainer.classList.remove('d-none');
+            rawContainer.classList.add('d-none');
+        }
+    });
+
+    function renderJson(obj, indent) {
+        if (obj === null) return '<span class="text-muted">null</span>';
+        if (typeof obj === 'boolean') return `<span class="text-primary">${obj}</span>`;
+        if (typeof obj === 'number') return `<span class="text-info">${obj}</span>`;
+        if (typeof obj === 'string') {
+            // 检查是否是多行文本
+            if (obj.includes('\n')) {
+                return `<pre class="mb-0 mt-1"><code>${escapeHtml(obj)}</code></pre>`;
+            }
+            return `<span class="text-success">"${escapeHtml(obj)}"</span>`;
+        }
+
+        if (Array.isArray(obj)) {
+            if (obj.length === 0) return '<span class="text-muted">[]</span>';
+            let html = '<div>[<div style="margin-left: 24px;">';
+            obj.forEach((item, i) => {
+                html += `<div>${renderJson(item, indent + '  ')}${i < obj.length - 1 ? ',' : ''}</div>`;
+            });
+            html += '</div>]</div>';
+            return html;
+        }
+
+        if (typeof obj === 'object') {
+            const keys = Object.keys(obj);
+            if (keys.length === 0) return '<span class="text-muted">{}</span>';
+            let html = '<div>{<div style="margin-left: 24px;">';
+            keys.forEach((key, i) => {
+                html += `<div><strong class="text-light">${escapeHtml(key)}</strong>: ${renderJson(obj[key], indent + '  ')}${i < keys.length - 1 ? ',' : ''}</div>`;
+            });
+            html += '</div>}</div>';
+            return html;
+        }
+
+        return escapeHtml(String(obj));
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+});
+</script>
+{% endif %}
+{% endblock %}

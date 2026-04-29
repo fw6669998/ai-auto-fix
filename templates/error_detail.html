@@ -1,0 +1,198 @@
+{% extends "base.html" %}
+
+{% block title %}错误 #{{ error.id }} - AI 代码质量管理{% endblock %}
+
+{% block content %}
+<div class="mb-4">
+    <a href="/admin/errors" class="btn btn-outline-secondary mb-3">← 返回列表</a>
+
+    {% if error %}
+    <div class="card mb-4">
+        <div class="card-header">
+            <h6 class="mb-0">修改状态和上下文</h6>
+        </div>
+        <div class="card-body">
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">修复状态</label>
+                    <select class="form-select" id="fixResult">
+                        <option value="">待处理</option>
+                        <option value="success">已修复</option>
+                        <option value="failure">修复失败</option>
+                        <option value="skipped">跳过</option>
+                    </select>
+                </div>
+                <div class="col-md-8">
+                    <label class="form-label">AI上下文（供AI处理时参考）</label>
+                    <textarea class="form-control" id="context" rows="3" placeholder="如：这是支付模块的代码，请注意...">{{ error.context or '' }}</textarea>
+                </div>
+            </div>
+            <div class="mt-3">
+                <button type="button" class="btn btn-primary" id="saveBtn">保存</button>
+            </div>
+            <script>
+            document.getElementById('saveBtn').addEventListener('click', function() {
+                const fixResult = document.getElementById('fixResult').value;
+                const context = document.getElementById('context').value;
+                fetch('/api/admin/errors/{{ error.id }}/status', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({fix_result: fixResult, context: context})
+                }).then(r => r.json()).then(r => {
+                    if (r.success) location.reload();
+                    else alert(r.msg || '保存失败');
+                });
+            });
+            {% if error.fix_result %}
+            document.getElementById('fixResult').value = '{{ error.fix_result }}';
+            {% endif %}
+            </script>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">错误详情 #{{ error.id }}</h5>
+            {% if error.fix_result == 'success' %}
+            <span class="badge bg-success">已修复</span>
+            {% elif error.fix_result == 'failure' %}
+            <span class="badge bg-danger">修复失败</span>
+            {% elif error.fix_result == 'skipped' %}
+            <span class="badge bg-info">跳过</span>
+            {% else %}
+            <span class="badge bg-warning text-dark">待处理</span>
+            {% endif %}
+        </div>
+        <div class="card-body">
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    <strong>项目：</strong> {{ error.project_name or '-' }}<br>
+                    <strong>错误哈希：</strong> <code>{{ error.error_hash }}</code><br>
+                    <strong>发生次数：</strong> {{ error.occur_count }}<br>
+                    <strong>最后发生：</strong> {{ error.occur_last.strftime('%Y-%m-%d %H:%M:%S') if error.occur_last else '-' }}
+                </div>
+                <div class="col-md-6">
+                    <strong>修复次数：</strong> {{ error.fix_count }}<br>
+                    <strong>修复分支：</strong> {{ error.branch_name or '-' }}<br>
+                    <strong>修复时间：</strong> {{ error.fix_time.strftime('%Y-%m-%d %H:%M:%S') if error.fix_time else '-' }}<br>
+                    <strong>创建时间：</strong> {{ error.created_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">
+            <h6 class="mb-0">错误信息</h6>
+        </div>
+        <div class="card-body p-0">
+            <pre class="mb-0 bg-code p-3 border-0 rounded-0"><code>{{ error.error_message or '-' }}</code></pre>
+        </div>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-header">
+            <h6 class="mb-0">错误内容</h6>
+        </div>
+        <div class="card-body p-0">
+            <pre class="mb-0 bg-code p-3 border-0 rounded-0" style="max-height: 400px; overflow-y: auto;"><code>{{ error.error_content }}</code></pre>
+        </div>
+    </div>
+
+    {% if error.fix_details %}
+    <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 class="mb-0">修复详情</h6>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="rawToggle">
+                <label class="form-check-label" for="rawToggle">显示原始</label>
+            </div>
+        </div>
+        <div class="card-body p-0">
+            <div id="fixDetailsParsed" class="p-3 bg-code border-0 rounded-0" style="max-height: 800px; overflow-y: auto;"></div>
+            <pre id="fixDetailsRaw" class="mb-0 bg-code p-3 border-0 rounded-0 d-none" style="max-height: 800px; overflow-y: auto;"><code>{{ error.fix_details }}</code></pre>
+        </div>
+    </div>
+    {% endif %}
+    {% else %}
+    <div class="alert alert-warning">记录不存在</div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% if error.fix_details %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const content = {{ error.fix_details|tojson }};
+    const parsedContainer = document.getElementById('fixDetailsParsed');
+    const rawContainer = document.getElementById('fixDetailsRaw');
+    const toggle = document.getElementById('rawToggle');
+
+    // 尝试解析JSON
+    let data;
+    try {
+        data = JSON.parse(content);
+        parsedContainer.innerHTML = renderJson(data, '');
+    } catch (e) {
+        // 如果不是JSON，直接显示文本
+        parsedContainer.innerHTML = `<pre class="mb-0"><code>${escapeHtml(content)}</code></pre>`;
+        toggle.disabled = true;
+    }
+
+    // 切换显示
+    toggle.addEventListener('change', function() {
+        if (this.checked) {
+            parsedContainer.classList.add('d-none');
+            rawContainer.classList.remove('d-none');
+        } else {
+            parsedContainer.classList.remove('d-none');
+            rawContainer.classList.add('d-none');
+        }
+    });
+
+    function renderJson(obj, indent) {
+        if (obj === null) return '<span class="text-muted">null</span>';
+        if (typeof obj === 'boolean') return `<span class="text-primary">${obj}</span>`;
+        if (typeof obj === 'number') return `<span class="text-info">${obj}</span>`;
+        if (typeof obj === 'string') {
+            // 检查是否是多行文本
+            if (obj.includes('\n')) {
+                return `<pre class="mb-0 mt-1"><code>${escapeHtml(obj)}</code></pre>`;
+            }
+            return `<span class="text-success">"${escapeHtml(obj)}"</span>`;
+        }
+
+        if (Array.isArray(obj)) {
+            if (obj.length === 0) return '<span class="text-muted">[]</span>';
+            let html = '<div>[<div style="margin-left: 24px;">';
+            obj.forEach((item, i) => {
+                html += `<div>${renderJson(item, indent + '  ')}${i < obj.length - 1 ? ',' : ''}</div>`;
+            });
+            html += '</div>]</div>';
+            return html;
+        }
+
+        if (typeof obj === 'object') {
+            const keys = Object.keys(obj);
+            if (keys.length === 0) return '<span class="text-muted">{}</span>';
+            let html = '<div>{<div style="margin-left: 24px;">';
+            keys.forEach((key, i) => {
+                html += `<div><strong class="text-light">${escapeHtml(key)}</strong>: ${renderJson(obj[key], indent + '  ')}${i < keys.length - 1 ? ',' : ''}</div>`;
+            });
+            html += '</div>}</div>';
+            return html;
+        }
+
+        return escapeHtml(String(obj));
+    }
+
+    function escapeHtml(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+});
+</script>
+{% endif %}
+{% endblock %}

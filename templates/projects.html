@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}工程管理 - AI 代码质量管理{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>工程管理</h1>
+    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addProjectModal">
+        添加工程
+    </button>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h6 class="mb-0">工程列表</h6>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+            <table class="table table-striped table-hover mb-0">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>工程名称</th>
+                        <th>工程路径</th>
+                        <th>工作树路径</th>
+                        <th>主分支</th>
+                        <th>状态</th>
+                        <th>创建时间</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="projectsTableBody">
+                    <tr><td colspan="8" class="text-center">加载中...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- 添加工程模态框 -->
+<div class="modal fade" id="addProjectModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">添加工程</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="addProjectForm">
+                    <div class="mb-3">
+                        <label class="form-label">工程路径 *</label>
+                        <input type="text" class="form-control" id="projectPath" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">工程名称 *</label>
+                        <input type="text" class="form-control" id="projectName" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">主分支</label>
+                        <input type="text" class="form-control" id="mainBranch" value="master">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="addProject()">添加</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 提示消息 -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+    <div id="messageToast" class="toast" role="alert">
+        <div class="toast-header">
+            <strong class="me-auto">提示</strong>
+            <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+        </div>
+        <div class="toast-body" id="messageBody"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const modal = new bootstrap.Modal(document.getElementById('addProjectModal'));
+const toastEl = document.getElementById('messageToast');
+const toast = new bootstrap.Toast(toastEl);
+
+// 监听工程路径输入框失去焦点事件
+document.getElementById('projectPath').addEventListener('blur', function() {
+    const path = this.value.trim();
+    if (!path) return;
+
+    fetch('/api/admin/projects/path-info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: path })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            const info = data.data;
+            // 自动填充工程名称（如果用户还没有输入）
+            const nameInput = document.getElementById('projectName');
+            if (!nameInput.value.trim()) {
+                nameInput.value = info.folder_name;
+            }
+            // 自动填充主分支
+            document.getElementById('mainBranch').value = info.current_branch;
+            // 检查是否是git仓库
+            if (!info.is_git_repo) {
+                showMessage('该路径不是git仓库，请先初始化git', 'warning');
+            }
+        } else {
+            showMessage(data.msg || '获取路径信息失败', 'warning');
+        }
+    });
+});
+
+function loadProjects() {
+    fetch('/api/admin/projects')
+        .then(r => r.json())
+        .then(data => {
+            renderProjects(data.items);
+        });
+}
+
+function renderProjects(projects) {
+    const tbody = document.getElementById('projectsTableBody');
+    if (!projects.length) {
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">暂无工程，请点击"添加工程"按钮添加</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = projects.map(project => `
+        <tr>
+            <td>${project.id}</td>
+            <td>${escapeHtml(project.project_name)}</td>
+            <td class="text-truncate" style="max-width: 300px;" title="${escapeHtml(project.project_path)}">${escapeHtml(project.project_path)}</td>
+            <td class="text-truncate" style="max-width: 300px;" title="${escapeHtml(project.worktree_path || '')}">${escapeHtml(project.worktree_path || '-')}</td>
+            <td>${escapeHtml(project.main_branch)}</td>
+            <td title="${escapeHtml(project.status_msg || '')}">${getStatusBadge(project.status)}</td>
+            <td>${project.created_at ? new Date(project.created_at).toLocaleString() : '-'}</td>
+            <td>
+                ${project.status !== 'active' ? `
+                    <button class="btn btn-sm btn-outline-success me-1" onclick="setupProject(${project.id})">
+                        设置
+                    </button>
+                ` : ''}
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteProject(${project.id})">
+                    清理
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function getStatusBadge(status) {
+    if (status === 'active') return '<span class="badge bg-success">激活</span>';
+    if (status === 'pending') return '<span class="badge bg-secondary">待设置</span>';
+    if (status === 'setting' || status === 'cleaning') return '<span class="badge bg-warning text-dark">处理中</span>';
+    if (status === 'failed') return '<span class="badge bg-danger">失败</span>';
+    return '<span class="badge bg-secondary">未知</span>';
+}
+
+function addProject() {
+    const projectName = document.getElementById('projectName').value.trim();
+    const projectPath = document.getElementById('projectPath').value.trim();
+    const mainBranch = document.getElementById('mainBranch').value.trim() || 'master';
+
+    if (!projectName || !projectPath) {
+        showMessage('请填写工程名称和路径', 'danger');
+        return;
+    }
+
+    fetch('/api/admin/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            project_name: projectName,
+            project_path: projectPath,
+            main_branch: mainBranch
+        })
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            showMessage(data.msg || '添加成功');
+            modal.hide();
+            document.getElementById('addProjectForm').reset();
+            loadProjects();
+            // 定期刷新看状态更新
+            setTimeout(loadProjects, 2000);
+            setTimeout(loadProjects, 5000);
+        } else {
+            showMessage(data.msg || '添加失败', 'danger');
+        }
+    });
+}
+
+function setupProject(projectId) {
+    fetch(`/api/admin/projects/${projectId}/setup`, { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showMessage(data.msg || '设置成功');
+                loadProjects();
+                setTimeout(loadProjects, 2000);
+                setTimeout(loadProjects, 5000);
+            } else {
+                showMessage(data.msg || '设置失败', 'danger');
+            }
+        });
+}
+
+function deleteProject(projectId) {
+    if (!confirm('确定要清理此工程吗？这将删除工作树和相关配置。')) {
+        return;
+    }
+
+    fetch(`/api/admin/projects/${projectId}`, { method: 'DELETE' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.success) {
+                showMessage(data.msg || '清理成功');
+                loadProjects();
+            } else {
+                showMessage(data.msg || '清理失败', 'danger');
+            }
+        });
+}
+
+function showMessage(msg, type = 'success') {
+    document.getElementById('messageBody').textContent = msg;
+    const toastEl = document.getElementById('messageToast');
+    toastEl.querySelector('.toast-header').className = `toast-header text-white bg-${type}`;
+    toast.show();
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+// 初始加载
+loadProjects();
+
+// 每5秒刷新一次状态
+setInterval(loadProjects, 5000);
+</script>
+{% endblock %}

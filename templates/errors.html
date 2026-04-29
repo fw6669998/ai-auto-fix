@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}错误修复记录 - AI 代码质量管理{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h1>错误修复记录</h1>
+    <div class="btn-group" role="group">
+        <a href="/admin/errors" class="btn btn-outline-secondary {% if not status %}active{% endif %}">全部</a>
+        <a href="/admin/errors?status=pending" class="btn btn-outline-warning {% if status == 'pending' %}active{% endif %}">待处理</a>
+        <a href="/admin/errors?status=success" class="btn btn-outline-success {% if status == 'success' %}active{% endif %}">已修复</a>
+        <a href="/admin/errors?status=failure" class="btn btn-outline-danger {% if status == 'failure' %}active{% endif %}">修复失败</a>
+        <a href="/admin/errors?status=skipped" class="btn btn-outline-info {% if status == 'skipped' %}active{% endif %}">跳过</a>
+    </div>
+</div>
+
+<div class="table-responsive">
+    <table class="table table-striped table-hover">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>项目</th>
+                <th>错误信息</th>
+                <th>状态</th>
+                <th>发生次数</th>
+                <th>最后发生</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="error-table-body">
+            <tr><td colspan="7" class="text-center">加载中...</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<nav id="pagination" class="mt-4"></nav>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const page = {{ page|default(1) }};
+const status = "{{ status|default('') }}";
+
+function loadData(currentPage = 1) {
+    let url = `/api/admin/errors?page=${currentPage}`;
+    if (status) url += `&status=${status}`;
+
+    fetch(url)
+        .then(r => r.json())
+        .then(data => {
+            renderTable(data.items);
+            renderPagination(data);
+        });
+}
+
+function renderTable(items) {
+    const tbody = document.getElementById('error-table-body');
+    if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">暂无数据</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = items.map(item => `
+        <tr>
+            <td>${item.id}</td>
+            <td>${escapeHtml(item.project_name || '-')}</td>
+            <td class="text-truncate" style="max-width: 300px;" title="${escapeHtml(item.error_message || '')}">${escapeHtml(item.error_message || '-')}</td>
+            <td>${getStatusBadge(item.fix_result)}</td>
+            <td>${item.occur_count}</td>
+            <td>${item.occur_last ? new Date(item.occur_last).toLocaleString() : '-'}</td>
+            <td><a href="/admin/errors/${item.id}" class="btn btn-sm btn-outline-primary">详情</a></td>
+        </tr>
+    `).join('');
+}
+
+function getStatusBadge(status) {
+    if (status === 'success') return '<span class="badge bg-success status-badge">已修复</span>';
+    if (status === 'failure') return '<span class="badge bg-danger status-badge">修复失败</span>';
+    if (status === 'skipped') return '<span class="badge bg-info status-badge">跳过</span>';
+    return '<span class="badge bg-warning text-dark status-badge">待处理</span>';
+}
+
+function renderPagination(data) {
+    const nav = document.getElementById('pagination');
+    if (data.pages <= 1) {
+        nav.innerHTML = '';
+        return;
+    }
+
+    let html = '<ul class="pagination justify-content-center">';
+    const baseUrl = status ? `/admin/errors?status=${status}&page=` : `/admin/errors?page=`;
+
+    if (data.page > 1) html += `<li class="page-item"><a class="page-link" href="${baseUrl}${data.page - 1}">上一页</a></li>`;
+
+    for (let i = 1; i <= data.pages; i++) {
+        const active = i === data.page ? 'active' : '';
+        html += `<li class="page-item ${active}"><a class="page-link" href="${baseUrl}${i}">${i}</a></li>`;
+    }
+
+    if (data.page < data.pages) html += `<li class="page-item"><a class="page-link" href="${baseUrl}${data.page + 1}">下一页</a></li>`;
+
+    html += '</ul>';
+    nav.innerHTML = html;
+}
+
+function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+}
+
+loadData(page);
+</script>
+{% endblock %}
