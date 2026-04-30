@@ -1,8 +1,8 @@
 import threading
 import time
 
-import config
-from src import database, ai_fixer, ai_reviewer
+from src import config
+from src import database, ai_bugfix, ai_review
 from src.tool import log
 from src.model import ErrorLog
 
@@ -27,8 +27,9 @@ class SchedulerThread(threading.Thread):
         while self.running:
             try:
                 with threading.Lock():
-                    ai_fixer.process_errors()
-                    ai_reviewer.process_commits()
+                    print('.', end='')
+                    ai_bugfix.process_errors()
+                    ai_review.process_commits()
 
 
             except Exception as e:
@@ -62,6 +63,3 @@ def stop_scheduler():
         scheduler_thread.running = False
         scheduler_thread.join()
         scheduler_running = False
-
-
-

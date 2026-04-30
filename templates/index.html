@@ -1,11 +1,32 @@
 {% extends "base.html" %}
 
-{% block title %}首页 - AI 代码质量管理{% endblock %}
+{% block title %}首页 - AI 代码检查修复{% endblock %}
 
 {% block content %}
 <h1 class="mb-4">概览</h1>
 
 <div class="row g-4 mb-4">
+    <div class="col-md-4">
+        <div class="card border-secondary">
+            <div class="card-header bg-secondary text-white">工程管理</div>
+            <div class="card-body">
+                <div class="row text-center">
+                    <div class="col-6">
+                        <h3>{{ stats.total_projects or 0 }}</h3>
+                        <small class="text-muted">总数</small>
+                    </div>
+                    <div class="col-6">
+                        <h3 class="text-success">{{ stats.active_projects or 0 }}</h3>
+                        <small class="text-muted">已激活</small>
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer">
+                <a href="/admin/projects" class="btn btn-outline-secondary btn-sm">查看详情 →</a>
+            </div>
+        </div>
+    </div>
+
     <div class="col-md-4">
         <div class="card border-primary">
             <div class="card-header bg-primary text-white">错误统计</div>
@@ -52,27 +73,6 @@
             </div>
             <div class="card-footer">
                 <a href="/admin/commits" class="btn btn-outline-info btn-sm">查看详情 →</a>
-            </div>
-        </div>
-    </div>
-
-    <div class="col-md-4">
-        <div class="card border-secondary">
-            <div class="card-header bg-secondary text-white">工程管理</div>
-            <div class="card-body">
-                <div class="row text-center">
-                    <div class="col-6">
-                        <h3>{{ stats.total_projects or 0 }}</h3>
-                        <small class="text-muted">总数</small>
-                    </div>
-                    <div class="col-6">
-                        <h3 class="text-success">{{ stats.active_projects or 0 }}</h3>
-                        <small class="text-muted">已激活</small>
-                    </div>
-                </div>
-            </div>
-            <div class="card-footer">
-                <a href="/admin/projects" class="btn btn-outline-secondary btn-sm">查看详情 →</a>
             </div>
         </div>
     </div>

@@ -1,16 +1,21 @@
 {% extends "base.html" %}
 
-{% block title %}Commit审查记录 - AI 代码质量管理{% endblock %}
+{% block title %}Commit审查记录 - AI 代码检查修复{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1>Commit 审查记录</h1>
-    <div class="btn-group" role="group">
-        <a href="/admin/commits" class="btn btn-outline-secondary {% if not status %}active{% endif %}">全部</a>
-        <a href="/admin/commits?status=pending" class="btn btn-outline-warning {% if status == 'pending' %}active{% endif %}">待检查</a>
-        <a href="/admin/commits?status=success" class="btn btn-outline-success {% if status == 'success' %}active{% endif %}">通过</a>
-        <a href="/admin/commits?status=failure" class="btn btn-outline-danger {% if status == 'failure' %}active{% endif %}">有问题</a>
-        <a href="/admin/commits?status=skipped" class="btn btn-outline-info {% if status == 'skipped' %}active{% endif %}">跳过</a>
+    <div class="d-flex gap-3 align-items-center">
+        <div class="btn-group" role="group">
+            <a href="/admin/commits{% if project_name %}?project_name={{ project_name|urlencode }}{% endif %}" class="btn btn-outline-secondary {% if not status %}active{% endif %}">全部</a>
+            <a href="/admin/commits?status=pending{% if project_name %}&project_name={{ project_name|urlencode }}{% endif %}" class="btn btn-outline-warning {% if status == 'pending' %}active{% endif %}">待检查</a>
+            <a href="/admin/commits?status=no_issue{% if project_name %}&project_name={{ project_name|urlencode }}{% endif %}" class="btn btn-outline-success {% if status == 'no_issue' %}active{% endif %}">通过</a>
+            <a href="/admin/commits?status=has_issue{% if project_name %}&project_name={{ project_name|urlencode }}{% endif %}" class="btn btn-outline-danger {% if status == 'has_issue' %}active{% endif %}">有问题</a>
+            <a href="/admin/commits?status=skipped{% if project_name %}&project_name={{ project_name|urlencode }}{% endif %}" class="btn btn-outline-info {% if status == 'skipped' %}active{% endif %}">跳过</a>
+        </div>
+        <select id="project-filter" class="form-select" style="width: 200px;">
+            <option value="">全部项目</option>
+        </select>
     </div>
 </div>
 
@@ -21,6 +26,7 @@
                 <th>ID</th>
                 <th>项目</th>
                 <th>Commit ID</th>
+                <th>提交消息</th>
                 <th>分支</th>
                 <th>状态</th>
                 <th>创建时间</th>
@@ -28,7 +34,7 @@
             </tr>
         </thead>
         <tbody id="commit-table-body">
-            <tr><td colspan="7" class="text-center">加载中...</td></tr>
+            <tr><td colspan="8" class="text-center">加载中...</td></tr>
         </tbody>
     </table>
 </div>
@@ -39,13 +45,15 @@
 {% block scripts %}
 <script>
 const page = {{ page|default(1) }};
-const status = "{{ status|default('') }}";
+const status = {{ (status or '')|tojson }};
+const projectName = {{ (project_name or '')|tojson }};
 
 function loadData(currentPage = 1) {
-    let url = `/api/admin/commits?page=${currentPage}`;
-    if (status) url += `&status=${status}`;
+    const params = new URLSearchParams({ page: currentPage });
+    if (status) params.set('status', status);
+    if (projectName) params.set('project_name', projectName);
 
-    fetch(url)
+    fetch(`/api/admin/commits?${params.toString()}`)
         .then(r => r.json())
         .then(data => {
             renderTable(data.items);
@@ -53,10 +61,40 @@ function loadData(currentPage = 1) {
         });
 }
 
+function loadProjects() {
+    fetch('/api/admin/commits/projects')
+        .then(r => r.json())
+        .then(data => {
+            const select = document.getElementById('project-filter');
+            data.projects.forEach(project => {
+                const option = document.createElement('option');
+                option.value = project;
+                option.textContent = project;
+                if (project === projectName) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+        });
+
+    document.getElementById('project-filter').addEventListener('change', function() {
+        const selected = this.value;
+        const url = new URL(window.location);
+        if (selected) {
+            url.searchParams.set('project_name', selected);
+        } else {
+            url.searchParams.delete('project_name');
+        }
+        window.location.href = url.toString();
+    });
+}
+
+loadProjects();
+
 function renderTable(items) {
     const tbody = document.getElementById('commit-table-body');
     if (!items.length) {
-        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">暂无数据</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">暂无数据</td></tr>';
         return;
     }
 
@@ -65,18 +103,22 @@ function renderTable(items) {
             <td>${item.id}</td>
             <td>${escapeHtml(item.project_name || '-')}</td>
             <td><code>${item.commit_id.substring(0, 12)}</code></td>
-            <td>${escapeHtml(item.branch || '-')}</td>
-            <td>${getStatusBadge(item.check_result)}</td>
+            <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(item.message || '')}">${escapeHtml(item.message || '-')}</td>
+            <td>${escapeHtml(item.branch_name || '-')}</td>
+            <td>${getStatusBadge(item.status)}</td>
             <td>${item.created_at ? new Date(item.created_at).toLocaleString() : '-'}</td>
-            <td><a href="/admin/commits/${item.id}" class="btn btn-sm btn-outline-primary">详情</a></td>
+            <td>
+                <a href="/admin/commits/${item.id}" class="btn btn-sm btn-outline-primary me-1">详情</a>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteCommit(${item.id})">删除</button>
+            </td>
         </tr>
     `).join('');
 }
 
-function getStatusBadge(result) {
-    if (result === 'no_issue') return '<span class="badge bg-success status-badge">通过</span>';
-    if (result === 'has_issue') return '<span class="badge bg-danger status-badge">有问题</span>';
-    if (result === 'skipped') return '<span class="badge bg-info status-badge">跳过</span>';
+function getStatusBadge(status) {
+    if (status === 'no_issue') return '<span class="badge bg-success status-badge">通过</span>';
+    if (status === 'has_issue') return '<span class="badge bg-danger status-badge">有问题</span>';
+    if (status === 'skipped') return '<span class="badge bg-info status-badge">跳过</span>';
     return '<span class="badge bg-warning text-dark status-badge">待检查</span>';
 }
 
@@ -87,17 +129,23 @@ function renderPagination(data) {
         return;
     }
 
-    let html = '<ul class="pagination justify-content-center">';
-    const baseUrl = status ? `/admin/commits?status=${status}&page=` : `/admin/commits?page=`;
+    function pageUrl(targetPage) {
+        const params = new URLSearchParams({ page: targetPage });
+        if (status) params.set('status', status);
+        if (projectName) params.set('project_name', projectName);
+        return `/admin/commits?${params.toString()}`;
+    }
 
-    if (data.page > 1) html += `<li class="page-item"><a class="page-link" href="${baseUrl}${data.page - 1}">上一页</a></li>`;
+    let html = '<ul class="pagination justify-content-center">';
+
+    if (data.page > 1) html += `<li class="page-item"><a class="page-link" href="${pageUrl(data.page - 1)}">上一页</a></li>`;
 
     for (let i = 1; i <= data.pages; i++) {
         const active = i === data.page ? 'active' : '';
-        html += `<li class="page-item ${active}"><a class="page-link" href="${baseUrl}${i}">${i}</a></li>`;
+        html += `<li class="page-item ${active}"><a class="page-link" href="${pageUrl(i)}">${i}</a></li>`;
     }
 
-    if (data.page < data.pages) html += `<li class="page-item"><a class="page-link" href="${baseUrl}${data.page + 1}">下一页</a></li>`;
+    if (data.page < data.pages) html += `<li class="page-item"><a class="page-link" href="${pageUrl(data.page + 1)}">下一页</a></li>`;
 
     html += '</ul>';
     nav.innerHTML = html;
@@ -107,6 +155,31 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function deleteCommit(id) {
+    if (!confirm('确定要删除这条Commit记录吗？相关的分支也会被删除。')) {
+        return;
+    }
+
+    fetch(`/api/admin/commits/${id}`, {
+        method: 'DELETE',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            alert('删除成功');
+            loadData(page);
+        } else {
+            alert('删除失败: ' + data.msg);
+        }
+    })
+    .catch(e => {
+        alert('删除失败: ' + e.message);
+    });
 }
 
 loadData(page);

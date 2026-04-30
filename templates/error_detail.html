@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}错误 #{{ error.id }} - AI 代码质量管理{% endblock %}
+{% block title %}错误 #{{ error.id }} - AI 代码检查修复{% endblock %}
 
 {% block content %}
 <div class="mb-4">
@@ -15,15 +15,15 @@
             <div class="row g-3">
                 <div class="col-md-4">
                     <label class="form-label">修复状态</label>
-                    <select class="form-select" id="fixResult">
-                        <option value="">待处理</option>
+                    <select class="form-select" id="status">
+                        <option value="pending">待处理</option>
                         <option value="success">已修复</option>
                         <option value="failure">修复失败</option>
                         <option value="skipped">跳过</option>
                     </select>
                 </div>
                 <div class="col-md-8">
-                    <label class="form-label">AI上下文（供AI处理时参考）</label>
+                    <label class="form-label">额外AI上下文（供AI处理时参考）</label>
                     <textarea class="form-control" id="context" rows="3" placeholder="如：这是支付模块的代码，请注意...">{{ error.context or '' }}</textarea>
                 </div>
             </div>
@@ -32,19 +32,19 @@
             </div>
             <script>
             document.getElementById('saveBtn').addEventListener('click', function() {
-                const fixResult = document.getElementById('fixResult').value;
+                const status = document.getElementById('status').value;
                 const context = document.getElementById('context').value;
                 fetch('/api/admin/errors/{{ error.id }}/status', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({fix_result: fixResult, context: context})
+                    body: JSON.stringify({status: status, context: context})
                 }).then(r => r.json()).then(r => {
                     if (r.success) location.reload();
                     else alert(r.msg || '保存失败');
                 });
             });
-            {% if error.fix_result %}
-            document.getElementById('fixResult').value = '{{ error.fix_result }}';
+            {% if error.status %}
+            document.getElementById('status').value = '{{ error.status }}';
             {% endif %}
             </script>
         </div>
@@ -53,11 +53,11 @@
     <div class="card mb-4">
         <div class="card-header d-flex justify-content-between align-items-center">
             <h5 class="mb-0">错误详情 #{{ error.id }}</h5>
-            {% if error.fix_result == 'success' %}
+            {% if error.status == 'success' %}
             <span class="badge bg-success">已修复</span>
-            {% elif error.fix_result == 'failure' %}
+            {% elif error.status == 'failure' %}
             <span class="badge bg-danger">修复失败</span>
-            {% elif error.fix_result == 'skipped' %}
+            {% elif error.status == 'skipped' %}
             <span class="badge bg-info">跳过</span>
             {% else %}
             <span class="badge bg-warning text-dark">待处理</span>
@@ -83,29 +83,36 @@
 
     <div class="card mb-4">
         <div class="card-header">
-            <h6 class="mb-0">错误信息</h6>
+            <h6 class="mb-0">错误简要信息</h6>
         </div>
         <div class="card-body p-0">
             <pre class="mb-0 bg-code p-3 border-0 rounded-0"><code>{{ error.error_message or '-' }}</code></pre>
         </div>
     </div>
 
+    {% if error.error_content %}
     <div class="card mb-4">
-        <div class="card-header">
-            <h6 class="mb-0">错误内容</h6>
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h6 class="mb-0">错误详细内容</h6>
+            <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="errorRawToggle">
+                <label class="form-check-label" for="errorRawToggle">显示原始</label>
+            </div>
         </div>
         <div class="card-body p-0">
-            <pre class="mb-0 bg-code p-3 border-0 rounded-0" style="max-height: 400px; overflow-y: auto;"><code>{{ error.error_content }}</code></pre>
+            <div id="errorContentParsed" class="p-3 bg-code border-0 rounded-0" style="max-height: 400px; overflow-y: auto;"></div>
+            <pre id="errorContentRaw" class="mb-0 bg-code p-3 border-0 rounded-0 d-none" style="max-height: 400px; overflow-y: auto;"><code>{{ error.error_content }}</code></pre>
         </div>
     </div>
+    {% endif %}
 
     {% if error.fix_details %}
     <div class="card">
         <div class="card-header d-flex justify-content-between align-items-center">
             <h6 class="mb-0">修复详情</h6>
             <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="rawToggle">
-                <label class="form-check-label" for="rawToggle">显示原始</label>
+                <input class="form-check-input" type="checkbox" id="fixRawToggle">
+                <label class="form-check-label" for="fixRawToggle">显示原始</label>
             </div>
         </div>
         <div class="card-body p-0">
@@ -121,42 +128,46 @@
 {% endblock %}
 
 {% block scripts %}
-{% if error.fix_details %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    const content = {{ error.fix_details|tojson }};
-    const parsedContainer = document.getElementById('fixDetailsParsed');
-    const rawContainer = document.getElementById('fixDetailsRaw');
-    const toggle = document.getElementById('rawToggle');
+    function initJsonViewer(containerId, rawId, toggleId, content) {
+        const parsedContainer = document.getElementById(containerId);
+        const rawContainer = document.getElementById(rawId);
+        const toggle = document.getElementById(toggleId);
+        if (!parsedContainer || !rawContainer || !toggle) return;
 
-    // 尝试解析JSON
-    let data;
-    try {
-        data = JSON.parse(content);
-        parsedContainer.innerHTML = renderJson(data, '');
-    } catch (e) {
-        // 如果不是JSON，直接显示文本
-        parsedContainer.innerHTML = `<pre class="mb-0"><code>${escapeHtml(content)}</code></pre>`;
-        toggle.disabled = true;
+        let data;
+        try {
+            data = JSON.parse(content);
+            parsedContainer.innerHTML = renderJson(data, '');
+        } catch (e) {
+            parsedContainer.innerHTML = `<pre class="mb-0"><code>${escapeHtml(content)}</code></pre>`;
+            toggle.disabled = true;
+        }
+
+        toggle.addEventListener('change', function() {
+            if (this.checked) {
+                parsedContainer.classList.add('d-none');
+                rawContainer.classList.remove('d-none');
+            } else {
+                parsedContainer.classList.remove('d-none');
+                rawContainer.classList.add('d-none');
+            }
+        });
     }
 
-    // 切换显示
-    toggle.addEventListener('change', function() {
-        if (this.checked) {
-            parsedContainer.classList.add('d-none');
-            rawContainer.classList.remove('d-none');
-        } else {
-            parsedContainer.classList.remove('d-none');
-            rawContainer.classList.add('d-none');
-        }
-    });
+    {% if error.error_content %}
+    initJsonViewer('errorContentParsed', 'errorContentRaw', 'errorRawToggle', {{ error.error_content|tojson }});
+    {% endif %}
+    {% if error.fix_details %}
+    initJsonViewer('fixDetailsParsed', 'fixDetailsRaw', 'fixRawToggle', {{ error.fix_details|tojson }});
+    {% endif %}
 
     function renderJson(obj, indent) {
         if (obj === null) return '<span class="text-muted">null</span>';
         if (typeof obj === 'boolean') return `<span class="text-primary">${obj}</span>`;
         if (typeof obj === 'number') return `<span class="text-info">${obj}</span>`;
         if (typeof obj === 'string') {
-            // 检查是否是多行文本
             if (obj.includes('\n')) {
                 return `<pre class="mb-0 mt-1"><code>${escapeHtml(obj)}</code></pre>`;
             }
@@ -194,5 +205,4 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 </script>
-{% endif %}
 {% endblock %}

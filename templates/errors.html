@@ -1,16 +1,21 @@
 {% extends "base.html" %}
 
-{% block title %}错误修复记录 - AI 代码质量管理{% endblock %}
+{% block title %}错误修复记录 - AI 代码检查修复{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
     <h1>错误修复记录</h1>
-    <div class="btn-group" role="group">
-        <a href="/admin/errors" class="btn btn-outline-secondary {% if not status %}active{% endif %}">全部</a>
-        <a href="/admin/errors?status=pending" class="btn btn-outline-warning {% if status == 'pending' %}active{% endif %}">待处理</a>
-        <a href="/admin/errors?status=success" class="btn btn-outline-success {% if status == 'success' %}active{% endif %}">已修复</a>
-        <a href="/admin/errors?status=failure" class="btn btn-outline-danger {% if status == 'failure' %}active{% endif %}">修复失败</a>
-        <a href="/admin/errors?status=skipped" class="btn btn-outline-info {% if status == 'skipped' %}active{% endif %}">跳过</a>
+    <div class="d-flex gap-3 align-items-center">
+        <div class="btn-group" role="group">
+            <a href="/admin/errors{% if project_name %}?project_name={{ project_name|urlencode }}{% endif %}" class="btn btn-outline-secondary {% if not status %}active{% endif %}">全部</a>
+            <a href="/admin/errors?status=pending{% if project_name %}&project_name={{ project_name|urlencode }}{% endif %}" class="btn btn-outline-warning {% if status == 'pending' %}active{% endif %}">待处理</a>
+            <a href="/admin/errors?status=success{% if project_name %}&project_name={{ project_name|urlencode }}{% endif %}" class="btn btn-outline-success {% if status == 'success' %}active{% endif %}">已修复</a>
+            <a href="/admin/errors?status=failure{% if project_name %}&project_name={{ project_name|urlencode }}{% endif %}" class="btn btn-outline-danger {% if status == 'failure' %}active{% endif %}">修复失败</a>
+            <a href="/admin/errors?status=skipped{% if project_name %}&project_name={{ project_name|urlencode }}{% endif %}" class="btn btn-outline-info {% if status == 'skipped' %}active{% endif %}">跳过</a>
+        </div>
+        <select id="project-filter" class="form-select" style="width: 200px;">
+            <option value="">全部项目</option>
+        </select>
     </div>
 </div>
 
@@ -39,19 +44,51 @@
 {% block scripts %}
 <script>
 const page = {{ page|default(1) }};
-const status = "{{ status|default('') }}";
+const status = {{ (status or '')|tojson }};
+const projectName = {{ (project_name or '')|tojson }};
 
 function loadData(currentPage = 1) {
-    let url = `/api/admin/errors?page=${currentPage}`;
-    if (status) url += `&status=${status}`;
+    const params = new URLSearchParams({ page: currentPage });
+    if (status) params.set('status', status);
+    if (projectName) params.set('project_name', projectName);
 
-    fetch(url)
+    fetch(`/api/admin/errors?${params.toString()}`)
         .then(r => r.json())
         .then(data => {
             renderTable(data.items);
             renderPagination(data);
         });
 }
+
+function loadProjects() {
+    fetch('/api/admin/errors/projects')
+        .then(r => r.json())
+        .then(data => {
+            const select = document.getElementById('project-filter');
+            data.projects.forEach(project => {
+                const option = document.createElement('option');
+                option.value = project;
+                option.textContent = project;
+                if (project === projectName) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+        });
+
+    document.getElementById('project-filter').addEventListener('change', function() {
+        const selected = this.value;
+        const url = new URL(window.location);
+        if (selected) {
+            url.searchParams.set('project_name', selected);
+        } else {
+            url.searchParams.delete('project_name');
+        }
+        window.location.href = url.toString();
+    });
+}
+
+loadProjects();
 
 function renderTable(items) {
     const tbody = document.getElementById('error-table-body');
@@ -65,10 +102,13 @@ function renderTable(items) {
             <td>${item.id}</td>
             <td>${escapeHtml(item.project_name || '-')}</td>
             <td class="text-truncate" style="max-width: 300px;" title="${escapeHtml(item.error_message || '')}">${escapeHtml(item.error_message || '-')}</td>
-            <td>${getStatusBadge(item.fix_result)}</td>
+            <td>${getStatusBadge(item.status)}</td>
             <td>${item.occur_count}</td>
             <td>${item.occur_last ? new Date(item.occur_last).toLocaleString() : '-'}</td>
-            <td><a href="/admin/errors/${item.id}" class="btn btn-sm btn-outline-primary">详情</a></td>
+            <td>
+                <a href="/admin/errors/${item.id}" class="btn btn-sm btn-outline-primary me-1">详情</a>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteError(${item.id})">删除</button>
+            </td>
         </tr>
     `).join('');
 }
@@ -87,17 +127,23 @@ function renderPagination(data) {
         return;
     }
 
-    let html = '<ul class="pagination justify-content-center">';
-    const baseUrl = status ? `/admin/errors?status=${status}&page=` : `/admin/errors?page=`;
+    function pageUrl(targetPage) {
+        const params = new URLSearchParams({ page: targetPage });
+        if (status) params.set('status', status);
+        if (projectName) params.set('project_name', projectName);
+        return `/admin/errors?${params.toString()}`;
+    }
 
-    if (data.page > 1) html += `<li class="page-item"><a class="page-link" href="${baseUrl}${data.page - 1}">上一页</a></li>`;
+    let html = '<ul class="pagination justify-content-center">';
+
+    if (data.page > 1) html += `<li class="page-item"><a class="page-link" href="${pageUrl(data.page - 1)}">上一页</a></li>`;
 
     for (let i = 1; i <= data.pages; i++) {
         const active = i === data.page ? 'active' : '';
-        html += `<li class="page-item ${active}"><a class="page-link" href="${baseUrl}${i}">${i}</a></li>`;
+        html += `<li class="page-item ${active}"><a class="page-link" href="${pageUrl(i)}">${i}</a></li>`;
     }
 
-    if (data.page < data.pages) html += `<li class="page-item"><a class="page-link" href="${baseUrl}${data.page + 1}">下一页</a></li>`;
+    if (data.page < data.pages) html += `<li class="page-item"><a class="page-link" href="${pageUrl(data.page + 1)}">下一页</a></li>`;
 
     html += '</ul>';
     nav.innerHTML = html;
@@ -107,6 +153,31 @@ function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function deleteError(id) {
+    if (!confirm('确定要删除这条错误记录吗？相关的分支也会被删除。')) {
+        return;
+    }
+
+    fetch(`/api/admin/errors/${id}`, {
+        method: 'DELETE',
+        headers: {
+            'Content-Type': 'application/json',
+        }
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.success) {
+            alert('删除成功');
+            loadData(page);
+        } else {
+            alert('删除失败: ' + data.msg);
+        }
+    })
+    .catch(e => {
+        alert('删除失败: ' + e.message);
+    });
 }
 
 loadData(page);

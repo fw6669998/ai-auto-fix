@@ -12,7 +12,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from .model import ErrorLog, CommitLog, Project, Base
-import config
+from . import config, tool
 
 
 class Database:
@@ -26,7 +26,7 @@ class Database:
         self.Session = sessionmaker(bind=self.engine, expire_on_commit=False)
 
     def _ensure_schema(self):
-        """兼容旧SQLite数据库，补齐新增字段。"""
+        """兼容旧SQLite数据库，补齐新增字段，迁移commit_logs表结构。"""
         if not str(self.engine.url).startswith("sqlite"):
             return
         with self.engine.begin() as conn:
@@ -34,12 +34,28 @@ class Database:
             if "worktree_path" not in columns:
                 conn.exec_driver_sql("ALTER TABLE projects ADD COLUMN worktree_path VARCHAR")
 
-    def insert_error_log(self, error_content: str, error_message: str = "", project_name: str = "") -> ErrorLog:
+            # 迁移commit_logs: 合并check_status和check_result为status
+            commit_columns = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(commit_logs)").fetchall()]
+            if "status" not in commit_columns:
+                conn.exec_driver_sql("ALTER TABLE commit_logs ADD COLUMN status VARCHAR DEFAULT 'pending'")
+                conn.exec_driver_sql("""
+                    UPDATE commit_logs SET status = CASE
+                        WHEN check_result = 'no_issue' THEN 'no_issue'
+                        WHEN check_result = 'has_issue' THEN 'has_issue'
+                        WHEN check_result = 'skipped' THEN 'skipped'
+                        ELSE 'pending'
+                    END
+                """)
+
+    def insert_error_log(self, error_content: str, project_name, error_message: str = "",
+                         hash_content: str = "") -> ErrorLog:
         """
         插入错误日志，如果已存在则更新计数
         返回: ErrorLog对象
         """
-        error_hash = self._compute_hash(error_content)
+        if not hash_content:
+            hash_content = error_content
+        error_hash = self._compute_hash(hash_content)
         now = datetime.now()
 
         with self.Session() as session:
@@ -47,6 +63,7 @@ class Database:
             existing = session.execute(stmt).scalar_one_or_none()
 
             if existing:
+                tool.log(f"错误已存在,当前状态: {existing.status}")
                 existing.occur_count += 1
                 existing.occur_last = now
                 existing.updated_at = now
@@ -82,17 +99,17 @@ class Database:
             return session.execute(stmt).scalar_one_or_none()
 
     def get_pending_errors(self) -> List[ErrorLog]:
-        """获取待处理的错误日志（fix_result 为空且处理次数不超过3的记录）"""
+        """获取待处理的错误日志（status = 'pending' 且处理次数不超过3的记录）"""
         with self.Session() as session:
             stmt = (
                 select(ErrorLog)
-                .where(ErrorLog.fix_result.is_(None))
+                .where(ErrorLog.status == "pending")
                 .where(ErrorLog.occur_count <= 3)
                 .order_by(ErrorLog.occur_count.desc(), ErrorLog.created_at.asc())
             )
             return list(session.execute(stmt).scalars().all())
 
-    def update_error_fix_result(self, error_id: int, branch_name: str, fix_result: str,
+    def update_error_fix_result(self, error_id: int, branch_name: str, status: str,
                                 fix_details: str):
         """更新错误修复结果"""
         now = datetime.now()
@@ -101,21 +118,21 @@ class Database:
             log: ErrorLog = session.execute(stmt).scalar_one_or_none()
             if log:
                 log.branch_name = branch_name
-                log.fix_result = fix_result
+                log.status = status
                 log.fix_details = fix_details
                 log.fix_time = now
                 log.fix_count += 1
                 log.updated_at = now
                 session.commit()
 
-    def update_error_status(self, error_id: int, fix_result: str, context: str = None):
+    def update_error_status(self, error_id: int, status: str, context: str = None):
         """手动更新错误状态和上下文"""
         now = datetime.now()
         with self.Session() as session:
             stmt = select(ErrorLog).where(ErrorLog.id == error_id)
             log: ErrorLog = session.execute(stmt).scalar_one_or_none()
             if log:
-                log.fix_result = fix_result
+                log.status = status
                 log.context = context
                 log.updated_at = now
                 session.commit()
@@ -129,22 +146,22 @@ class Database:
             return list(session.execute(stmt).scalars().all())
 
     def get_fixed_errors(self, limit: int = 100) -> List[ErrorLog]:
-        """获取已修复的错误日志（fix_result = 'success'）"""
+        """获取已修复的错误日志（status = 'success'）"""
         with self.Session() as session:
             stmt = (
                 select(ErrorLog)
-                .where(ErrorLog.fix_result == "success")
+                .where(ErrorLog.status == "success")
                 .order_by(ErrorLog.fix_time.desc())
                 .limit(limit)
             )
             return list(session.execute(stmt).scalars().all())
 
     def get_failed_errors(self, limit: int = 100) -> List[ErrorLog]:
-        """获取修复失败的错误日志（fix_result IN ('failure', 'skipped')）"""
+        """获取修复失败的错误日志（status IN ('failure', 'skipped')）"""
         with self.Session() as session:
             stmt = (
                 select(ErrorLog)
-                .where(ErrorLog.fix_result.in_(["failure", "skipped"]))
+                .where(ErrorLog.status.in_(["failure", "skipped"]))
                 .order_by(ErrorLog.fix_time.desc())
                 .limit(limit)
             )
@@ -152,7 +169,7 @@ class Database:
 
     # ---------- Commit 相关操作 ----------
 
-    def insert_commit_log(self, project_name: str, commit_id: str, branch: str = "") -> CommitLog:
+    def insert_commit_log(self, project_name: str, commit_id: str, message: str = "") -> CommitLog:
         """插入commit记录，如果已存在则返回已有记录"""
         with self.Session() as session:
             stmt = select(CommitLog).where(
@@ -166,8 +183,7 @@ class Database:
             log = CommitLog(
                 project_name=project_name,
                 commit_id=commit_id,
-                branch=branch,
-                check_status="pending",
+                message=message,
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
             )
@@ -181,53 +197,55 @@ class Database:
         with self.Session() as session:
             stmt = (
                 select(CommitLog)
-                .where(CommitLog.check_result.is_(None))
+                .where(CommitLog.status == "pending")
                 .order_by(CommitLog.created_at.asc())
             )
             return list(session.execute(stmt).scalars().all())
 
-    def update_commit_check_result(self, commit_id: int, check_status: str,
-                                   check_result: Optional[str] = None,
-                                   check_details: Optional[str] = None):
+    def update_commit_check_result(self, commit_id: int, status: str,
+                                   check_details: Optional[str] = None,
+                                   branch_name: Optional[str] = None):
         """更新commit检查结果"""
         now = datetime.now()
         with self.Session() as session:
             stmt = select(CommitLog).where(CommitLog.id == commit_id)
             log: CommitLog = session.execute(stmt).scalar_one_or_none()
             if log:
-                log.check_status = check_status
-                log.check_result = check_result
+                log.status = status
                 log.check_details = check_details
                 log.updated_at = now
+                log.branch_name = branch_name
                 session.commit()
 
-    def update_commit_status(self, commit_id: int, check_result: str, context: str = None):
+    def update_commit_status(self, commit_id: int, status: str, context: str = None):
         """手动更新commit状态和上下文"""
         now = datetime.now()
         with self.Session() as session:
             stmt = select(CommitLog).where(CommitLog.id == commit_id)
             log: CommitLog = session.execute(stmt).scalar_one_or_none()
             if log:
-                log.check_result = check_result
+                log.status = status
                 log.context = context
                 log.updated_at = now
                 session.commit()
                 return True
             return False
 
-    def get_error_logs_paginated(self, page: int = 1, per_page: int = 20, status: str = None) -> dict:
+    def get_error_logs_paginated(self, page: int = 1, per_page: int = 20, status: str = None, project_name: str = None) -> dict:
         """分页查询错误日志"""
         from sqlalchemy import func
         with self.Session() as session:
             stmt = select(ErrorLog)
             if status == "success":
-                stmt = stmt.where(ErrorLog.fix_result == "success")
+                stmt = stmt.where(ErrorLog.status == "success")
             elif status == "failure":
-                stmt = stmt.where(ErrorLog.fix_result == "failure")
+                stmt = stmt.where(ErrorLog.status == "failure")
             elif status == "skipped":
-                stmt = stmt.where(ErrorLog.fix_result == "skipped")
+                stmt = stmt.where(ErrorLog.status == "skipped")
             elif status == "pending":
-                stmt = stmt.where(ErrorLog.fix_result.is_(None))
+                stmt = stmt.where(ErrorLog.status == "pending")
+            if project_name:
+                stmt = stmt.where(ErrorLog.project_name == project_name)
 
             # 总数
             count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -246,19 +264,15 @@ class Database:
                 "pages": (total + per_page - 1) // per_page if total > 0 else 1
             }
 
-    def get_commit_logs_paginated(self, page: int = 1, per_page: int = 20, status: str = None) -> dict:
+    def get_commit_logs_paginated(self, page: int = 1, per_page: int = 20, status: str = None, project_name: str = None) -> dict:
         """分页查询commit记录"""
         from sqlalchemy import func
         with self.Session() as session:
             stmt = select(CommitLog)
-            if status == "success":
-                stmt = stmt.where(CommitLog.check_result == "no_issue")
-            elif status == "failure":
-                stmt = stmt.where(CommitLog.check_result == "has_issue")
-            elif status == "skipped":
-                stmt = stmt.where(CommitLog.check_result == "skipped")
-            elif status == "pending":
-                stmt = stmt.where(CommitLog.check_result.is_(None))
+            if status and status != "None":
+                stmt = stmt.where(CommitLog.status == status)
+            if project_name:
+                stmt = stmt.where(CommitLog.project_name == project_name)
 
             # 总数
             count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -283,19 +297,37 @@ class Database:
             stmt = select(CommitLog).where(CommitLog.id == commit_id)
             return session.execute(stmt).scalar_one_or_none()
 
+    def get_projects_from_errors(self) -> List[str]:
+        """获取错误日志表中所有出现的项目名称"""
+        from sqlalchemy import distinct
+        with self.Session() as session:
+            stmt = select(distinct(ErrorLog.project_name)).where(ErrorLog.project_name.isnot(None))
+            return [row[0] for row in session.execute(stmt).all() if row[0]]
+
+    def get_projects_from_commits(self) -> List[str]:
+        """获取Commit记录表中所有出现的项目名称"""
+        from sqlalchemy import distinct
+        with self.Session() as session:
+            stmt = select(distinct(CommitLog.project_name)).where(CommitLog.project_name.isnot(None))
+            return [row[0] for row in session.execute(stmt).all() if row[0]]
+
     def get_stats(self) -> dict:
         """获取统计数据"""
         from sqlalchemy import func
         with self.Session() as session:
             # 错误统计
             total_errors = session.execute(select(func.count(ErrorLog.id))).scalar()
-            fixed_errors = session.execute(select(func.count(ErrorLog.id)).where(ErrorLog.fix_result == "success")).scalar()
-            pending_errors = session.execute(select(func.count(ErrorLog.id)).where(ErrorLog.fix_result.is_(None))).scalar()
+            fixed_errors = session.execute(
+                select(func.count(ErrorLog.id)).where(ErrorLog.status == "success")).scalar()
+            pending_errors = session.execute(
+                select(func.count(ErrorLog.id)).where(ErrorLog.status == "pending")).scalar()
 
             # Commit统计
             total_commits = session.execute(select(func.count(CommitLog.id))).scalar()
-            success_commits = session.execute(select(func.count(CommitLog.id)).where(CommitLog.check_result == "no_issue")).scalar()
-            failure_commits = session.execute(select(func.count(CommitLog.id)).where(CommitLog.check_result == "has_issue")).scalar()
+            success_commits = session.execute(
+                select(func.count(CommitLog.id)).where(CommitLog.status == "no_issue")).scalar()
+            failure_commits = session.execute(
+                select(func.count(CommitLog.id)).where(CommitLog.status == "has_issue")).scalar()
 
             # 项目统计
             total_projects = session.execute(select(func.count(Project.id))).scalar()
@@ -381,6 +413,28 @@ class Database:
             if project:
                 session.delete(project)
                 session.commit()
+
+    def delete_error_log(self, error_id: int) -> bool:
+        """删除错误日志"""
+        with self.Session() as session:
+            stmt = select(ErrorLog).where(ErrorLog.id == error_id)
+            log = session.execute(stmt).scalar_one_or_none()
+            if log:
+                session.delete(log)
+                session.commit()
+                return True
+            return False
+
+    def delete_commit_log(self, commit_id: int) -> bool:
+        """删除Commit记录"""
+        with self.Session() as session:
+            stmt = select(CommitLog).where(CommitLog.id == commit_id)
+            log = session.execute(stmt).scalar_one_or_none()
+            if log:
+                session.delete(log)
+                session.commit()
+                return True
+            return False
 
     @staticmethod
     def _compute_hash(content: str) -> str:

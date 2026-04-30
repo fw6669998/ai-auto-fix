@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}工程管理 - AI 代码质量管理{% endblock %}
+{% block title %}工程管理 - AI 代码检查修复{% endblock %}
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
@@ -86,6 +86,16 @@
 const modal = new bootstrap.Modal(document.getElementById('addProjectModal'));
 const toastEl = document.getElementById('messageToast');
 const toast = new bootstrap.Toast(toastEl);
+const projectsTableBody = document.getElementById('projectsTableBody');
+
+projectsTableBody.addEventListener('click', function(event) {
+    const copyTarget = event.target.closest('[data-copy-path]');
+    if (!copyTarget) return;
+
+    copyText(copyTarget.dataset.copyPath)
+        .then(() => showMessage('路径已复制'))
+        .catch(() => showMessage('复制失败，请手动复制', 'danger'));
+});
 
 // 监听工程路径输入框失去焦点事件
 document.getElementById('projectPath').addEventListener('blur', function() {
@@ -127,18 +137,17 @@ function loadProjects() {
 }
 
 function renderProjects(projects) {
-    const tbody = document.getElementById('projectsTableBody');
     if (!projects.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">暂无工程，请点击"添加工程"按钮添加</td></tr>';
+        projectsTableBody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">暂无工程，请点击"添加工程"按钮添加</td></tr>';
         return;
     }
 
-    tbody.innerHTML = projects.map(project => `
+    projectsTableBody.innerHTML = projects.map(project => `
         <tr>
             <td>${project.id}</td>
             <td>${escapeHtml(project.project_name)}</td>
-            <td class="text-truncate" style="max-width: 300px;" title="${escapeHtml(project.project_path)}">${escapeHtml(project.project_path)}</td>
-            <td class="text-truncate" style="max-width: 300px;" title="${escapeHtml(project.worktree_path || '')}">${escapeHtml(project.worktree_path || '-')}</td>
+            <td>${renderCopyablePath(project.project_path)}</td>
+            <td>${renderCopyablePath(project.worktree_path)}</td>
             <td>${escapeHtml(project.main_branch)}</td>
             <td title="${escapeHtml(project.status_msg || '')}">${getStatusBadge(project.status)}</td>
             <td>${project.created_at ? new Date(project.created_at).toLocaleString() : '-'}</td>
@@ -154,6 +163,22 @@ function renderProjects(projects) {
             </td>
         </tr>
     `).join('');
+}
+
+function renderCopyablePath(path) {
+    if (!path) return '-';
+
+    const safePath = escapeHtml(path);
+    const safeAttr = escapeAttr(path);
+    return `
+        <button type="button"
+                class="btn btn-link p-0 text-start text-decoration-none text-truncate d-inline-block align-baseline"
+                style="max-width: 300px;"
+                title="点击复制：${safeAttr}"
+                data-copy-path="${safeAttr}">
+            ${safePath}
+        </button>
+    `;
 }
 
 function getStatusBadge(status) {
@@ -238,10 +263,39 @@ function showMessage(msg, type = 'success') {
     toast.show();
 }
 
+function copyText(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+    }
+
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.style.position = 'fixed';
+    textArea.style.left = '-9999px';
+    textArea.style.top = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.focus();
+    textArea.select();
+
+    return new Promise((resolve, reject) => {
+        try {
+            document.execCommand('copy') ? resolve() : reject();
+        } catch (error) {
+            reject(error);
+        } finally {
+            textArea.remove();
+        }
+    });
+}
+
 function escapeHtml(str) {
     const div = document.createElement('div');
     div.textContent = str;
     return div.innerHTML;
+}
+
+function escapeAttr(str) {
+    return escapeHtml(str).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 // 初始加载

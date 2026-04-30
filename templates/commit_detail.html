@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Commit #{{ commit.id }} - AI 代码质量管理{% endblock %}
+{% block title %}Commit #{{ commit.id }} - AI 代码检查修复{% endblock %}
 
 {% block content %}
 <div class="mb-4">
@@ -16,14 +16,14 @@
                 <div class="col-md-4">
                     <label class="form-label">审查结果</label>
                     <select class="form-select" id="checkResult">
-                        <option value="">待检查</option>
+                        <option value="pending">待检查</option>
                         <option value="no_issue">通过</option>
                         <option value="has_issue">有问题</option>
                         <option value="skipped">跳过</option>
                     </select>
                 </div>
                 <div class="col-md-8">
-                    <label class="form-label">AI上下文（供AI处理时参考）</label>
+                    <label class="form-label">额外AI上下文（供AI处理时参考）</label>
                     <textarea class="form-control" id="context" rows="3" placeholder="如：这是支付模块的代码，请注意...">{{ commit.context or '' }}</textarea>
                 </div>
             </div>
@@ -37,14 +37,14 @@
                 fetch('/api/admin/commits/{{ commit.id }}/status', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({check_result: checkResult, context: context})
+                    body: JSON.stringify({status: checkResult, context: context})
                 }).then(r => r.json()).then(r => {
                     if (r.success) location.reload();
                     else alert(r.msg || '保存失败');
                 });
             });
-            {% if commit.check_result %}
-            document.getElementById('checkResult').value = '{{ commit.check_result }}';
+            {% if commit.status %}
+            document.getElementById('checkResult').value = '{{ commit.status }}';
             {% endif %}
             </script>
         </div>
@@ -53,11 +53,11 @@
     <div class="card mb-4">
         <div class="card-header d-flex justify-content-between align-items-center">
             <h5 class="mb-0">Commit 审查详情 #{{ commit.id }}</h5>
-            {% if commit.check_result == 'no_issue' %}
+            {% if commit.status == 'no_issue' %}
             <span class="badge bg-success">通过</span>
-            {% elif commit.check_result == 'has_issue' %}
+            {% elif commit.status == 'has_issue' %}
             <span class="badge bg-danger">有问题</span>
-            {% elif commit.check_result == 'skipped' %}
+            {% elif commit.status == 'skipped' %}
             <span class="badge bg-info">跳过</span>
             {% else %}
             <span class="badge bg-warning text-dark">待检查</span>
@@ -68,10 +68,11 @@
                 <div class="col-md-6">
                     <strong>项目：</strong> {{ commit.project_name or '-' }}<br>
                     <strong>Commit ID：</strong> <code>{{ commit.commit_id }}</code><br>
-                    <strong>分支：</strong> {{ commit.branch or '-' }}
+                    <strong>提交消息：</strong> {{ commit.message or '-' }}
                 </div>
                 <div class="col-md-6">
-                    <strong>检查状态：</strong> {{ commit.check_status }}<br>
+                    <strong>分支：</strong> {{ commit.branch_name or '-' }}<br>
+                    <strong>状态：</strong> {{ commit.status }}<br>
                     <strong>创建时间：</strong> {{ commit.created_at.strftime('%Y-%m-%d %H:%M:%S') }}<br>
                     <strong>更新时间：</strong> {{ commit.updated_at.strftime('%Y-%m-%d %H:%M:%S') }}
                 </div>

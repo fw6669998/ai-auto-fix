@@ -38,7 +38,7 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(result.error_content, error_content)
         self.assertEqual(result.error_message, error_message)
         self.assertEqual(result.occur_count, 1)
-        self.assertIsNone(result.fix_result)
+        self.assertEqual(result.status, "pending")
 
     def test_insert_error_log_deduplication(self):
         """测试错误日志去重"""
@@ -62,7 +62,7 @@ class TestDatabase(unittest.TestCase):
 
         self.assertEqual(len(pending), 3)
         for error in pending:
-            self.assertIsNone(error.fix_result)
+            self.assertEqual(error.status, "pending")
 
     def test_get_pending_errors_count_limit(self):
         """测试处理次数超过3次时不被获取"""
@@ -83,12 +83,12 @@ class TestDatabase(unittest.TestCase):
         self.db.update_error_fix_result(
             error.id,
             branch_name="ai_fix/test",
-            fix_result="success",
+            status="success",
             fix_details="Fixed successfully"
         )
 
         updated = self.db.get_error_log_by_id(error.id)
-        self.assertEqual(updated.fix_result, "success")
+        self.assertEqual(updated.status, "success")
         self.assertEqual(updated.branch_name, "ai_fix/test")
 
     def test_get_all_errors(self):

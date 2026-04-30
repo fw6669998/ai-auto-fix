@@ -1,105 +1,217 @@
+"""
+企业微信通知模块 - 集成到主服务中
+"""
 import asyncio
-import os
-import sqlite3
-from dotenv import load_dotenv
-from aibot import WSClient, WSClientOptions, generate_req_id
+import threading
+from typing import Optional
+from flask import Blueprint, request
+from aibot import WSClient, WSClientOptions
 
-from src import tool
+from . import config
+from .tool import log, result
 
-# 加载 .env 文件中的环境变量
-load_dotenv()
+# 创建蓝图
+notifier_api = Blueprint('notifier_api', __name__, url_prefix='/api/notifier')
 
-# 数据库路径
-conn = tool.get_db()
+# 全局实例
+_ws_client: Optional[WSClient] = None
+_loop: Optional[asyncio.AbstractEventLoop] = None
+_running = False
 
-# 1. 创建客户端实例
-ws_client = WSClient(
-    WSClientOptions(
-        bot_id='aibNQlFp9lV1Lnce1X8YtSNw7nTVdmdzYfr',  # 企业微信后台获取的机器人 ID
-        secret='yOMgsSxxhtYS1p3mN7aYYgJCzPxGHcGnyBtcRm6QOMR',  # 企业微信后台获取的机器人 Secret
+
+class _QuietAiBotLogger:
+    """屏蔽 SDK 的 DEBUG 日志，避免心跳日志刷屏。"""
+
+    def debug(self, message: str, *args: object) -> None:
+        # log(f'AiBotSDK debug: {message}', *args)
+        pass
+
+    def info(self, message: str, *args: object) -> None:
+        log(f'AiBotSDK info: {message}', *args)
+
+    def warn(self, message: str, *args: object) -> None:
+        log(f'AiBotSDK warn: {message}', *args)
+
+    def error(self, message: str, *args: object) -> None:
+        log(f'AiBotSDK error: {message}', *args)
+
+
+@notifier_api.route('send', methods=['POST'])
+def send_message():
+    """发送企业微信消息的HTTP接口"""
+    data = request.get_json(force=True, silent=True)
+    content = data.get('content')
+    if not content:
+        return result(None, "参数错误: content必填", False)
+
+    success = send_message_sync(content)
+    if success:
+        return result(None, "消息发送成功")
+    else:
+        return result(None, "消息发送失败", False)
+
+
+def init_notifier():
+    """初始化企业微信通知客户端"""
+    global _ws_client, _loop, _running
+
+    if _running:
+        return
+
+    _ws_client = WSClient(
+        WSClientOptions(
+            bot_id=config.NOTIFIER_BOT_ID,
+            secret=config.NOTIFIER_SECRET,
+            logger=_QuietAiBotLogger(),
+        )
     )
-)
 
+    @_ws_client.on('authenticated')
+    def on_authenticated():
+        global _loop
+        _loop = asyncio.get_running_loop()
 
-# 2. 监听认证成功
-@ws_client.on('authenticated')
-def on_authenticated():
-    print('🔐 认证成功')
-    # 认证成功后启动错误日志处理任务
-    asyncio.create_task(process_error_logs())
+    @_ws_client.on('disconnected')
+    def on_disconnected():
+        pass
 
+    @_ws_client.on('error')
+    def on_error(error):
+        log(f'❌ 企业微信通知客户端错误: {error}')
 
-# 3. 监听文本消息并进行流式回复
-@ws_client.on('message.text')
-async def on_text(frame):
-    content = frame.get('body', {}).get('text', {}).get('content', '')
-    print(f'收到文本: {content}')
+    @_ws_client.on('message.text')
+    async def on_text(frame):
+        pass
 
-    stream_id = generate_req_id('stream')
+    @_ws_client.on('event.enter_chat')
+    async def on_enter_chat(frame):
+        await _ws_client.reply_welcome(frame, {
+            'msgtype': 'text',
+            'text': {'content': '您好！我是AI助手通知机器人，修复和审查结果将在此通知。'},
+        })
 
-    # 发送流式中间内容
-    await ws_client.reply_stream(frame, stream_id, '正在思考中...', False)
-
-    # 发送最终结果
-    await asyncio.sleep(1)
-    await ws_client.reply_stream(frame, stream_id, f'你好！你说的是: "{content}"', True)
-
-
-# 4. 监听进入会话事件（发送欢迎语）
-@ws_client.on('event.enter_chat')
-async def on_enter_chat(frame):
-    await ws_client.reply_welcome(frame, {
-        'msgtype': 'text',
-        'text': {'content': '您好！我是智能助手，有什么可以帮您的吗？'},
-    })
-
-
-# 5. 处理错误日志表的任务
-async def process_error_logs():
-    """每20秒遍历一次错误日志表，发送状态为0的消息"""
-    while True:
+    def run_websocket():
+        global _loop, _running
+        loop = asyncio.new_event_loop()
+        _loop = loop
+        asyncio.set_event_loop(loop)
         try:
-            await asyncio.sleep(20)  # 每20秒执行一次
-            await send_pending_error_messages()
+            async def connect_client():
+                await _ws_client.connect()
+
+            loop.run_until_complete(connect_client())
+            loop.run_forever()
         except Exception as e:
-            print(f'处理错误日志时发生异常: {e}')
+            log(f'WebSocket 线程异常: {type(e).__name__}, {e}')
+            import traceback
+            log(traceback.format_exc())
+        finally:
+            _running = False
+            if not loop.is_closed():
+                loop.close()
+
+    thread = threading.Thread(target=run_websocket, daemon=True)
+    thread.start()
+    _running = True
 
 
-async def send_pending_error_messages():
-    """查询并发送待处理的错误消息"""
+def send_message_sync(content: str):
+    """同步发送消息（供非异步代码调用）"""
+    print('发送消息通知')
+    user_id = config.NOTIFIER_USER_ID
+    loop = _loop
+    if not _ws_client or not loop:
+        log('企业微信通知客户端未初始化')
+        return False
+
+    if loop.is_closed() or not loop.is_running():
+        log(f'企业微信通知事件循环不可用, is_running={loop.is_running()}, is_closed={loop.is_closed()}')
+        return False
+
     try:
-        cursor = conn.cursor()
+        body = {
+            'msgtype': 'markdown',
+            'markdown': {'content': content}
+        }
 
-        # 查询发送状态为0的错误消息
-        cursor.execute('SELECT id, error_content FROM error_logs WHERE send_status = 0 or send_status IS NULL')
-        pending_messages = cursor.fetchall()
-
-        if not pending_messages:
-            print('没有待发送的错误消息')
-            conn.close()
-            return
-
-        for msg_id, message in pending_messages:
+        async def do_send():
             try:
-                # 发送 markdown 格式消息
-                body = {
-                    'msgtype': 'markdown',
-                    'markdown': {'content': message}
-                }
-                await ws_client.send_message('17320394612', body)
-                print(f'已发送错误消息 [{msg_id}]: {message[:50]}...')
-
-                # 发送成功后修改状态为1
-                cursor.execute('UPDATE error_logs SET send_status = 1 WHERE id = ?', (msg_id,))
-                conn.commit()
+                await _ws_client.send_message(user_id, body)
             except Exception as e:
-                print(f'发送消息 [{msg_id}] 失败: {e}')
-                continue
+                log(f'企业微信消息发送异常: {type(e).__name__}, {e}')
+                import traceback
+                log(traceback.format_exc())
 
+        future = asyncio.run_coroutine_threadsafe(do_send(), loop)
+
+        def on_done(done_future):
+            try:
+                done_future.result()
+            except Exception as e:
+                log(f'消息发送任务异常: {type(e).__name__}, {e}')
+
+        future.add_done_callback(on_done)
+        return True
     except Exception as e:
-        print(f'查询错误日志失败: {e}')
+        log(f'发送企业微信消息失败:{type(e).__name__}, {e}')
+        import traceback
+        log(traceback.format_exc())
+        return False
 
 
-# 6. 启动（便捷方法，内部管理事件循环）
-if __name__ == '__main__':
-    ws_client.run()
+def notify_error_fixed(
+        error_id: int,
+        project_name: str,
+        error_message: str,
+        status: str,
+        branch_name: str = None,
+        how_fix: str = '',
+        cause: str = '',
+):
+    """发送错误修复结果通知"""
+    if status == 'success':
+        status_text = '修复成功'
+    elif status == 'failure':
+        status_text = '修复失败'
+    else:
+        status_text = '已跳过'
+
+    content = f"""**错误修复结果**
+**项目**: {project_name}
+**状态**: {status_text}
+**错误信息**: {error_message}
+**造成原因**: {cause}
+**修复方法**: {how_fix}
+**分支**: {branch_name}
+**详情衔接**: [点击查看]({config.BASE_URL}/admin/errors/{error_id})
+"""
+    return send_message_sync(content)
+
+
+def notify_commit_reviewed(
+        commit_id: int,
+        project_name: str,
+        commit_message: str,
+        status: str,
+        branch_name: str = None,
+        issue: str = '',
+        how_fix: str = '',
+):
+    """发送Commit审查结果通知"""
+    if status == 'no_issue':
+        status_text = '没有发现问题'
+    elif status == 'has_issue':
+        status_text = '发现问题并已修复'
+    else:
+        status_text = '检查失败'
+
+    content = f"""**Commit审查结果**
+**项目**: {project_name}
+**提交消息**: {commit_message[:100]}
+**状态**: {status_text}
+**问题**: {issue}
+**修复方法**: {how_fix}
+**修复分支**: {branch_name}
+**详情衔接**: [点击查看]({config.BASE_URL}/admin/commits/{commit_id})
+"""
+    return send_message_sync(content)

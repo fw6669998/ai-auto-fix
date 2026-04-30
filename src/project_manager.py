@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Tuple, Optional
 
-import config
+from . import config
 from .tool import run_command, log
 from .database import get_database
 
@@ -17,18 +17,27 @@ POST_COMMIT_SCRIPT = '''#!/bin/bash
 # Auto-optimize AI post-commit hook
 
 # 获取commit信息
-COMMIT_ID=$(git rev-parse HEAD)
+COMMIT_ID=$(git rev-parse --short HEAD)
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
-PROJECT_NAME="{project_name}"
 
 # 如果是ai-开头的分支，不触发
 if [[ "$BRANCH" =~ ^ai- ]]; then
     exit 0
 fi
 
-# 调用API通知有新commit
-curl -X GET "http://localhost:3002/api/push/commit?project={project_name}&commit_id=$COMMIT_ID&branch=$BRANCH"
+# 获取最新提交的提交信息
+COMMIT_MSG=$(git log -1 --pretty=%B)
+# 如果提交信息中包含 ai_fix / ai_review / ai_ignore 则忽略
+case "$COMMIT_MSG" in
+  *ai_fix*|*ai_review*|*ai_ignore*)
+    echo "[post-commit] ignored: commit message contains ai_fix / ai_review / ai_ignore"
+    exit 0
+    ;;
+esac
 
+# 发送请求
+curl -s -o /dev/null -m 5 \
+  "http://127.0.0.1:3002/api/push/commit?project={project_name}&commit_id=$COMMIT_ID"
 exit 0
 '''
 
@@ -65,12 +74,19 @@ def setup_project(project_id: int) -> Tuple[bool, str]:
 
         # 创建worktree目录
         worktree_path = Path(project.worktree_path or get_worktree_path(project.project_name))
+
+        # 先清理 git 中可能残留的 worktree 注册信息（即使目录不存在）
+        if source_path.exists() and (source_path / ".git").exists():
+            # 尝试 remove --force 清理
+            remove_cmd = ["git", "worktree", "remove", "--force", str(worktree_path)]
+            run_command(remove_cmd, cwd=str(source_path))
+            # 运行 prune 清理所有丢失的 worktree
+            prune_cmd = ["git", "worktree", "prune"]
+            run_command(prune_cmd, cwd=str(source_path))
+
+        # 如果目录存在，删除它
         if worktree_path.exists():
-            # 先尝试用 git worktree remove 清理
-            if source_path.exists() and (source_path / ".git").exists():
-                remove_cmd = ["git", "worktree", "remove", "--force", str(worktree_path)]
-                run_command(remove_cmd, cwd=str(source_path))
-            # 然后再删除目录，带重试
+            # 删除目录，带重试
             for i in range(3):
                 try:
                     shutil.rmtree(worktree_path, ignore_errors=False)
@@ -112,7 +128,15 @@ def setup_project(project_id: int) -> Tuple[bool, str]:
         worktree_cmd = ["git", "worktree", "add", str(worktree_path), branch_name]
         code, _, stderr = run_command(worktree_cmd, cwd=str(source_path))
         if code != 0:
-            raise Exception(f"创建worktree失败: {stderr}")
+            # 如果失败，尝试 prune 后用 -f 强制添加
+            log(f"首次创建worktree失败，尝试强制模式: {stderr}")
+            prune_cmd = ["git", "worktree", "prune"]
+            run_command(prune_cmd, cwd=str(source_path))
+
+            worktree_cmd = ["git", "worktree", "add", "-f", str(worktree_path), branch_name]
+            code, _, stderr = run_command(worktree_cmd, cwd=str(source_path))
+            if code != 0:
+                raise Exception(f"创建worktree失败: {stderr}")
 
         # 设置post-commit hook - 在源项目git目录中
         hooks_dir = source_path / ".git" / "hooks"

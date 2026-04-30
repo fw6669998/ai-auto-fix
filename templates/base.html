@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}AI 代码质量管理{% endblock %}</title>
-    <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/css/bootstrap.min.css" rel="stylesheet">
+    <title>{% block title %}AI 代码检查修复{% endblock %}</title>
+    <link href="{{ url_for('static', filename='vendor/bootstrap/5.3.0/css/bootstrap.min.css') }}" rel="stylesheet">
     <style>
         body { padding-top: 60px; }
         .status-badge { font-size: 0.85em; }
@@ -23,7 +23,7 @@
 <body>
     <nav class="navbar navbar-expand-md navbar-dark bg-dark fixed-top">
         <div class="container">
-            <a class="navbar-brand" href="/admin/">AI 代码质量</a>
+            <a class="navbar-brand" href="/admin/">AI 代码检查修复</a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
             </button>
@@ -50,7 +50,7 @@
         {% block content %}{% endblock %}
     </main>
 
-    <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.0/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='vendor/bootstrap/5.3.0/js/bootstrap.bundle.min.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

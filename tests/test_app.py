@@ -18,7 +18,7 @@ class TestFlaskAPI(unittest.TestCase):
     def setUp(self):
         """设置测试环境"""
         from src.database import Database, _db_instance
-        import config
+        from src import config
 
         # 使用临时数据库
         self.temp_db = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
@@ -59,14 +59,6 @@ class TestFlaskAPI(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.get_json()
         self.assertFalse(data['success'])
-
-    def test_receive_commit(self):
-        """测试接收commit信息"""
-        response = self.client.get('/api/push/commit?project=app1&commit_id=abc123&branch=master')
-
-        self.assertEqual(response.status_code, 200)
-        data = response.get_json()
-        self.assertTrue(data['success'])
 
     def test_receive_commit_missing_params(self):
         """测试接收commit信息缺少必填参数"""

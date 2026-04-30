@@ -1,0 +1,26 @@
+#!/bin/bash
+# Auto-optimize AI post-commit hook
+
+# 获取commit信息
+COMMIT_ID=$(git rev-parse --short HEAD)
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+
+# 如果是ai-开头的分支，不触发
+if [[ "$BRANCH" =~ ^ai- ]]; then
+    exit 0
+fi
+
+# 获取最新提交的提交信息
+COMMIT_MSG=$(git log -1 --pretty=%B)
+# 如果提交信息中包含 ai_fix / ai_review / ai_ignore 则忽略
+case "$COMMIT_MSG" in
+  *ai_fix*|*ai_review*|*ai_ignore*)
+    echo "[post-commit] ignored: commit message contains ai_fix / ai_review / ai_ignore"
+    exit 0
+    ;;
+esac
+
+# 发送请求
+curl -s -o /dev/null -m 5 \
+  "http://127.0.0.1:3002/api/push/commit?project={project_name}&commit_id=$COMMIT_ID"
+exit 0

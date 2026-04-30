@@ -16,9 +16,9 @@ CHECK_COMMIT_PROMPT = """
 当完成后，返回json格式结果，不要包含任何解释、前言或 Markdown 代码块（不要用 ```json）。
 json格式：
 {
-    "has_issue":1,    //是否有严重逻辑错误:1=有,0=没有
-    "success":1,      //是否修复成功:1=成功,0=失败（如果没有问题则为1）
-    "cause":"xxx",    //如果有问题，说明具体原因；如果没有问题，填"未发现严重逻辑错误"
+    "has_issue":1,    //是否有严重逻辑错误: 1=有,0=没有
+    "has_modify":1,   //是否有代码修改: 1=有,0=没有
+    "issue":"xxx",    //具体问题
     "severity":"high/medium/low/none",  //严重程度
     "how_fix":"xxx",  //修复方法
 }
@@ -26,9 +26,7 @@ json格式：
 <commit diff>
 {diff}
 </commit diff>
-<context>
 {context}
-</context>
 """
 
 FIX_ERROR_PROMPT = """
@@ -48,7 +46,5 @@ json格式：
 <错误信息>
 {error_content}
 </错误信息>
-<context>
 {context}
-</context>
 """

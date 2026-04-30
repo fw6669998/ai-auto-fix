@@ -47,9 +47,9 @@ class CommitLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     project_name: Mapped[str] = mapped_column(String, default="")
     commit_id: Mapped[str] = mapped_column(String, nullable=False)
-    branch: Mapped[str] = mapped_column(String, default="")
-    check_status: Mapped[str] = mapped_column(String, default="pending")  # pending/checking/success/failure
-    check_result: Mapped[Optional[str]] = mapped_column(Text, default=None)  # has_issue/no_issue
+    branch_name: Mapped[str] = mapped_column(String, default="")
+    message: Mapped[str] = mapped_column(String, default="")
+    status: Mapped[str] = mapped_column(String, default="pending")  # pending/no_issue/has_issue/skipped
     check_details: Mapped[Optional[str]] = mapped_column(Text, default=None)
     context: Mapped[Optional[str]] = mapped_column(Text, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now)
@@ -80,7 +80,7 @@ class ErrorLog(Base):
     occur_last: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
     branch_name: Mapped[Optional[str]] = mapped_column(String, default=None)
     fix_count: Mapped[int] = mapped_column(Integer, default=0)
-    fix_result: Mapped[Optional[str]] = mapped_column(String, default=None)  # success/failure/skipped
+    status: Mapped[str] = mapped_column(String, default="pending")  # pending/success/failure/skipped
     fix_details: Mapped[Optional[str]] = mapped_column(Text, default=None)
     fix_time: Mapped[Optional[datetime]] = mapped_column(DateTime, default=None)
     context: Mapped[Optional[str]] = mapped_column(Text, default=None)

@@ -5,14 +5,13 @@ Commit 检查模块 - 检查 git commit 是否存在严重逻辑错误，发现�
 import json
 from datetime import datetime
 
-import config
+from src import config
 from src.tool import log, run_command, get_project_config, get_project_working_path, call_agent
-from src import database, prompts
+from src import database, prompts, notifier
 from src.model import CommitLog
 
 
 def process_commits():
-    log('定时执行commit检查')
     db = database.get_database()
     pending_commits = db.get_pending_commits()
     for commit in pending_commits:
@@ -27,20 +26,30 @@ def process_single_commit(commit_log: CommitLog):
         project_path = get_project_working_path(project)
         obj = ai_review(project_path, commit_log.commit_id, project.main_branch, commit_log.context)
         if 'has_issue' in obj:
+            status = "has_issue" if int(obj["has_issue"]) == 1 else "no_issue"
+            branch_name = obj.get("branch_name", "")
             db.update_commit_check_result(
                 commit_log.id,
-                check_status="success",
-                check_result="has_issue" if int(obj["has_issue"]) == 1 else "no_issue",
-                check_details=json.dumps(obj, ensure_ascii=False)
+                status=status,
+                check_details=json.dumps(obj, ensure_ascii=False),
+                branch_name=branch_name
             )
+            if status == "has_issue":
+                notifier.notify_commit_reviewed(
+                    commit_id=commit_log.id,
+                    project_name=commit_log.project_name,
+                    commit_message=obj.get("commit_message", ""),
+                    status=status,
+                    branch_name=branch_name,
+                    issue=obj.get("issue", ""),
+                    how_fix=obj.get("how_fix", "")
+                )
     except Exception as e:
         log(f"检查commit失败: {e}")
-        error_msg = str(e)
         # 不管什么原因，只要失败就标记检查结果，避免重复处理
         db.update_commit_check_result(
             commit_log.id,
-            check_status="failure",
-            check_result="skipped",  # 标记为跳过，避免重复处理
+            status="skipped",
             check_details=str(e)
         )
 
@@ -71,12 +80,12 @@ def ai_review(project_path: str, commit_id: str, main_branch: str = "master", co
         raise ValueError(f"解析结果失败: {str(e)}\n原始结果: {res[1]}")
 
     commit_msg = get_commit_message(project_path, commit_id)
-    has_issue = "1" if str(obj.get("has_issue", "0")) == "1" else "0"
+    obj['commit_message'] = commit_msg
 
-    if has_issue == "1" and int(obj.get("success", "0")) == 1 and obj.get("severity", "").lower() == "high":
+    if int(obj.get("has_issue", 0)) == 1 and int(obj.get('has_modify', 0)) == 1:
         current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
         branch = f'ai-review/{commit_id}-{current_time}'
-        obj['branch'] = branch
+        obj['branch_name'] = branch
         run_command(['git', 'switch', '-c', branch], project_path)
         run_command(['git', 'add', '.'], project_path)
         run_command(['git', 'commit', '-m', 'ai_review:' + commit_msg], project_path)

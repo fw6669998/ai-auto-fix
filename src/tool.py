@@ -10,7 +10,7 @@ from typing import Tuple
 
 from flask import jsonify
 
-import config
+from . import config
 
 
 def log(*args, **kwargs):
@@ -72,7 +72,9 @@ def run_command(command, cwd: str = None) -> Tuple[int, str, str]:
             encoding='utf-8',
             errors='replace'
         )
-        log('命令结果:', result.stdout, result.stderr)
+        stdout_preview = result.stdout[:100] if result.stdout else ""
+        stderr_preview = result.stderr[:100] if result.stderr else ""
+        log('命令结果:', stdout_preview, stderr_preview)
         return result.returncode, result.stdout, result.stderr
     except Exception as e:
         raise Exception(f"执行命令失败: {e}")
@@ -89,3 +91,17 @@ def call_agent(project_path: str, prompt: str):
             command.append(item)
     res = run_command(command, project_path)
     return res
+
+
+def get_commit_message(project_name: str, commit_id: str) -> str:
+    """获取commit的message"""
+    from .database import get_database
+    db = get_database()
+    project = db.get_project_by_name(project_name)
+    if project is None:
+        return ""
+    worktree_path = getattr(project, "worktree_path", None)
+    if not worktree_path:
+        return ""
+    res = run_command(['git', 'log', '-1', '--pretty=format:%s', commit_id], worktree_path)
+    return res[1] if res[0] == 0 else ""
