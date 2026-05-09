@@ -1,6 +1,6 @@
 # AI Auto Fix —— 让 Claude Code Agent 成为你的 24 小时自动化代码审查与修复助手
 
-> 还在手动排查线上错误、逐行 Review 同事代码？**AI Auto Fix** 是一套基于 Flask 的自动化系统，它接收错误日志和 Git Commit 信息，调度 Claude Code Agent 在隔离 worktree 中自动完成代码修复与审查，并通过企业微信实时推送结果。开发团队只需关注业务，把重复劳动交给 AI。
+> 还在手动排查线上错误、逐行 Review 代码？**AI Auto Fix** 是一套基于 Flask 的自动化系统，它接收错误日志和 Git Commit 信息，调度 Claude Code Agent 在隔离 worktree 中自动完成代码修复与审查，并通过企业微信实时推送结果。开发团队只需关注业务，把重复劳动交给 AI。
 
 ---
 
@@ -26,7 +26,7 @@
 
 ### 2. Commit 自动审查：提交即审查，问题早发现
 
-通过在项目仓库中注册 `post-commit` hook，每次团队成员 push 代码后，系统会自动：
+通过在项目仓库中注册 `post-commit` hook，每次commit代码后，系统会自动：
 
 1. 接收 Commit 信息并入库
 2. 获取该 Commit 的 diff
